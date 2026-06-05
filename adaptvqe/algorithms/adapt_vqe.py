@@ -2360,8 +2360,9 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             nits.append(nit)
             inv_hessians.append(inv_hessian)
 
-            echange_per_cnot = self.divide_by_cnots(energy_change, index)
-            echanges_per_cnot.append(echange_per_cnot)
+            if self.penalize_cnots or (self.dve and self.candidates == 1):
+                echange_per_cnot = self.divide_by_cnots(energy_change, index)
+                echanges_per_cnot.append(echange_per_cnot)
 
         if self.penalize_cnots or (self.dve and self.candidates == 1):
             # Choose operator that produces the best energy change per CNOT
@@ -2435,7 +2436,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
 
     def divide_by_cnots(self, value, index):
         """
-        Divides a value by the number of CNOTs in the circuit implementationf of a given operator
+        Divides a value by the number of CNOTs in the circuit implementation of a given operator
 
         Arguments:
             value (float): the value to be divided
