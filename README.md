@@ -21,7 +21,7 @@ Note that PySCF does not support Windows. You can use Windows Subsystem for Linu
 
 ## Test Systems
 
-All example scripts use the $H_2$ molecule as the simplest example. All other molecules featured in the papers can be created similarly (see submodule `molecules`). 
+Most example scripts use the $H_2$ molecule as the simplest example. All other molecules featured in the papers can be created similarly (see submodule `molecules`). 
 
 ## Simulation Time
 
