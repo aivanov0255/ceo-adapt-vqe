@@ -57,7 +57,9 @@ class IterationData:
         nits=None,
         qubit_order=None,
         n_swaps=None,
-        swap_net_circuit=None
+        swap_net_circuit=None,
+        nnz_gradients=None,
+        nnz_g_ops=None
     ):
         """
         Ansatz and energy at the end of the iteration
@@ -85,7 +87,8 @@ class IterationData:
         self.qubit_order = qubit_order
         self.n_swaps = n_swaps
         self.swap_net_circuit = swap_net_circuit
-
+        self.nnz_gradients = nnz_gradients
+        self.nnz_g_ops = nnz_g_ops
 
 class EvolutionData:
 
@@ -115,7 +118,9 @@ class EvolutionData:
         nits,
         qubit_order,
         n_swaps,
-        swap_net_circuit
+        swap_net_circuit,
+        nnz_gradients=None,
+        nnz_g_ops=None
     ):
 
         if self.its_data:
@@ -143,7 +148,9 @@ class EvolutionData:
             nits,
             qubit_order,
             n_swaps,
-            swap_net_circuit
+            swap_net_circuit,
+            nnz_gradients,
+            nnz_g_ops
         )
 
         self.its_data.append(it_data)
@@ -227,6 +234,13 @@ class EvolutionData:
             # No data yet. Return empty IterationData object
             return IterationData()
 
+    @property
+    def nnz_gradients(self):
+        return [it_data.nnz_gradients for it_data in self.its_data]
+    
+    @property
+    def nnz_g_ops(self):
+        return [it_data.nnz_g_ops for it_data in self.its_data]
 
 class AdaptData:
     """
@@ -295,7 +309,9 @@ class AdaptData:
         nits,
         qubit_order,
         n_swaps=None,
-        swap_net_circuit=None
+        swap_net_circuit=None,
+        iteration_nnz_gradients=None,
+        iteration_nnz_g_ops=None
     ):
         """
         Receives and processes the values fed to it by an instance of the AdaptVQE
@@ -324,6 +340,8 @@ class AdaptData:
           n_swaps (int): number of swaps necessary to implement the last operation, if
             the connectivity isn't all-to-all
           swap_net_circuit:
+          iteration_nnz_gradients: All of the non zero gradients of the ansatz
+          iteration_nnz_g_ops: All of the operators corresponding to the non zero gradients
         """
 
         if not isinstance(energy, float):
@@ -405,7 +423,9 @@ class AdaptData:
             nits,
             qubit_order,
             n_swaps,
-            swap_net_circuit
+            swap_net_circuit,
+            iteration_nnz_gradients,
+            iteration_nnz_g_ops
         )
 
         self.iteration_counter += 1

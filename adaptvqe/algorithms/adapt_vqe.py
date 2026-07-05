@@ -62,7 +62,8 @@ class AdaptVQE(metaclass=abc.ABCMeta):
         track_prep_g=False,
         previous_data=None,
         max_mpo_bond=None,
-        max_mps_bond=None
+        max_mps_bond=None,
+        rand_op_it_gap=None
     ):
         """
         Arguments:
@@ -108,6 +109,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             frozen_orbitals (list): Indices of orbitals that are considered to be permanently occupied. Note that
                 virtual orbitals are not yet implemented.
             previous_data (AdaptData): data from a previous run of ADAPT we wish to continue
+            rand_op_it_gap: The amount of iterations between every time the ADAPT-VQE adds a random operator.
         """
 
         self.pool = pool
@@ -133,6 +135,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
         self.track_prep_g = track_prep_g
         self.max_mpo_bond = max_mpo_bond
         self.max_mps_bond = max_mps_bond
+        self.rand_op_it_gap = rand_op_it_gap
 
         # Attributes describing type of CEO pool, when applicable. The algorithm runs differently for each of them
         self.dvg = "DVG" in self.pool.name
@@ -262,6 +265,9 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             raise ValueError("lnn flag employs swap circuits which are only defined for qubit excitation and coupled "
                              "exchange operator pools. Other pools may be implemented in linear nearest neighbor "
                              "connectivity using Qiskit (see lnn_qiskit kwarg).")
+            
+        if self.rand_op_it_gap is not None and not isinstance(self.rand_op_it_gap, int):
+            raise ValueError(f"rand_op_it_gap parameter only supports integers, and None for no functionality. Value {self.rand_op_it_gap} not recognized.")
 
     def initialize_hamiltonian(self):
         """
@@ -1274,6 +1280,9 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             # We have converged; do not complete the iteration
             return finished
 
+        self.iteration_nnz_gradients = list(viable_gradients)
+        self.iteration_nnz_g_ops = list(viable_candidates)
+
         while viable_candidates:
             # Select operators, track costs, and screen other viable candidates to add in this iteration
             # (e.g. if self.tetris=True, viable candidates are those whose supports are disjoint from those of any other
@@ -1281,6 +1290,17 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             energy, g, viable_candidates, viable_gradients = self.grow_and_update(
                 viable_candidates, viable_gradients
             )
+        
+        if self.rand_op_it_gap:
+            if self.data.iteration_counter % self.rand_op_it_gap == 0:
+                random_index, random_gradient = self.add_random_operator()
+                self.iteration_sel_gradients = np.append(
+                    self.iteration_sel_gradients, random_gradient
+                )
+                # Force re-optimization to include the random operator's parameter.
+                # If energy-based selection already set energy, we still need to re-optimize.
+                energy = None
+                g = random_gradient
 
         if energy is None:
             # Energy is not yet optimized, because the selection criterion is not energy-based. Optimize it.
@@ -1347,6 +1367,36 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             self.iteration_ngevs = self.iteration_ngevs + new_ngevs
         if new_nits:
             self.iteration_nits = self.iteration_nits + new_nits
+
+    def add_random_operator(self):
+        """
+        Select a random operator from the pool and append it to the ansatz.
+        Excludes operators already selected this iteration to avoid immediate duplicates.
+
+        Returns:
+            random_index (int): the pool index of the added operator
+            random_gradient (float): its gradient at the current state
+        """
+        
+        # Exclude operators added so far in this iteration
+        current_iteration_indices = set(
+            self.indices[len(self.data.evolution.last_it.ansatz.indices):]
+        )
+        available = [
+            i for i in range(self.pool.size)
+            if i not in current_iteration_indices
+        ]
+
+        random_index = int(np.random.choice(available))
+        random_gradient = self.eval_candidate_gradient(random_index)
+
+        indices = np.array(self.indices.copy(), dtype=int)
+        self.indices = np.append(indices, random_index)
+        self.coefficients.append(0)
+        self.gradients = np.append(self.gradients, random_gradient)
+
+        print(f"Random operator injected: index={random_index}, gradient={random_gradient:.6e}")
+        return random_index, random_gradient
 
     def initialize(self):
         """
@@ -1456,7 +1506,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             self.iteration_ngevs[-1] += extra_ngevs
 
         self.iteration_sel_gradients = np.append(self.iteration_sel_gradients, gradient)
-
+                
         return energy, gradient, viable_candidates, viable_gradients
 
     def get_iteration_swaps(self,qubits,qubit_order=None):
@@ -1520,7 +1570,9 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             self.iteration_nits,
             self.qubit_order.copy(),
             n_swaps,
-            swap_net_circuit
+            swap_net_circuit,
+            self.iteration_nnz_gradients,
+            self.iteration_nnz_g_ops
         )
 
         # Update current state
