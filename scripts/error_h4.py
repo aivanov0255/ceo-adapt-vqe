@@ -66,7 +66,7 @@ plt.plot(iteration, errors, label="Standard Data", color="red")
 
 for i, (iter_rand, errors_rand, operators_rand) in enumerate(data_rand):
     label = "Randomized Data" if i == 0 else None
-    plt.plot(iter_rand, errors_rand, label="Randomized Data", color="blue")
+    plt.plot(iter_rand, errors_rand, label=label, color="blue")
 
 plt.xlabel("Iteration")
 plt.ylabel("Errors")
