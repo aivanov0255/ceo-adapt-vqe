@@ -63,7 +63,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
         previous_data=None,
         max_mpo_bond=None,
         max_mps_bond=None,
-        rand_op_it_gap=None
+        add_random_when=None
     ):
         """
         Arguments:
@@ -109,7 +109,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
             frozen_orbitals (list): Indices of orbitals that are considered to be permanently occupied. Note that
                 virtual orbitals are not yet implemented.
             previous_data (AdaptData): data from a previous run of ADAPT we wish to continue
-            rand_op_it_gap: The amount of iterations between every time the ADAPT-VQE adds a random operator.
+            add_random_when: The amount of iterations between every time the ADAPT-VQE adds a random operator.
         """
 
         self.pool = pool
@@ -135,7 +135,7 @@ class AdaptVQE(metaclass=abc.ABCMeta):
         self.track_prep_g = track_prep_g
         self.max_mpo_bond = max_mpo_bond
         self.max_mps_bond = max_mps_bond
-        self.rand_op_it_gap = rand_op_it_gap
+        self.add_random_when = add_random_when
 
         # Attributes describing type of CEO pool, when applicable. The algorithm runs differently for each of them
         self.dvg = "DVG" in self.pool.name
@@ -266,8 +266,8 @@ class AdaptVQE(metaclass=abc.ABCMeta):
                              "exchange operator pools. Other pools may be implemented in linear nearest neighbor "
                              "connectivity using Qiskit (see lnn_qiskit kwarg).")
             
-        if self.rand_op_it_gap is not None and not isinstance(self.rand_op_it_gap, int):
-            raise ValueError(f"rand_op_it_gap parameter only supports integers, and None for no functionality. Value {self.rand_op_it_gap} not recognized.")
+        if self.add_random_when is not None and not isinstance(self.add_random_when, int):
+            raise ValueError(f"add_random_when parameter only supports integers, and None for no functionality. Value {self.add_random_when} not recognized.")
 
     def initialize_hamiltonian(self):
         """
@@ -1291,16 +1291,15 @@ class AdaptVQE(metaclass=abc.ABCMeta):
                 viable_candidates, viable_gradients
             )
         
-        if self.rand_op_it_gap:
-            if self.data.iteration_counter % self.rand_op_it_gap == 0:
-                random_index, random_gradient = self.add_random_operator()
-                self.iteration_sel_gradients = np.append(
-                    self.iteration_sel_gradients, random_gradient
-                )
-                # Force re-optimization to include the random operator's parameter.
-                # If energy-based selection already set energy, we still need to re-optimize.
-                energy = None
-                g = random_gradient
+        if self.add_random_when:
+            if self.data.iteration_counter % self.add_random_when == 0:
+                added, _random_index, random_gradient = self.add_random_operator()
+                if added:
+                    self.iteration_sel_gradients = np.append(
+                        self.iteration_sel_gradients, random_gradient
+                    )
+                    energy = None          # ensure optimization always runs
+                    g = random_gradient  
 
         if energy is None:
             # Energy is not yet optimized, because the selection criterion is not energy-based. Optimize it.
@@ -1370,33 +1369,52 @@ class AdaptVQE(metaclass=abc.ABCMeta):
 
     def add_random_operator(self):
         """
-        Select a random operator from the pool and append it to the ansatz.
-        Excludes operators already selected this iteration to avoid immediate duplicates.
+        Select a random operator from the pool with probability proportional to
+        gradient magnitude, then append it to the ansatz.
+
+        Operators already added in the current iteration are excluded.
+        If no operators have non-negligible gradients (|g| >= 1e-8), nothing is
+        added and (False, None, None) is returned.
 
         Returns:
-            random_index (int): the pool index of the added operator
-            random_gradient (float): its gradient at the current state
+            added (bool): True if an operator was added.
+            random_index (int | None): pool index of the added operator.
+            random_gradient (float | None): its gradient at the current state.
         """
-        
-        # Exclude operators added so far in this iteration
-        current_iteration_indices = set(
-            self.indices[len(self.data.evolution.last_it.ansatz.indices):]
-        )
-        available = [
-            i for i in range(self.pool.size)
-            if i not in current_iteration_indices
-        ]
 
-        random_index = int(np.random.choice(available))
-        random_gradient = self.eval_candidate_gradient(random_index)
+        # Exclude current operators to avoid duplicates
+        n_prev = len(self.data.evolution.last_it.ansatz.indices)
+        already_added = set(self.indices[n_prev:])
 
-        indices = np.array(self.indices.copy(), dtype=int)
-        self.indices = np.append(indices, random_index)
+        # Evaluate gradients for every remaining pool operator
+        candidates = []
+        for i in range(self.pool.size):
+            if i in already_added:
+                continue
+            g = self.eval_candidate_gradient(i)
+            if abs(g) >= 1e-8:
+                candidates.append((i, float(g)))
+
+        if not candidates:
+            print("add_random_operator: no operators with non-negligible gradients; skipping.")
+            return False, None, None
+
+        pool_indices, grads = zip(*candidates)
+        magnitudes = np.abs(grads)
+        probabilities = magnitudes / magnitudes.sum()
+
+        chosen = np.random.choice(len(pool_indices), p=probabilities)
+        random_index = pool_indices[chosen]
+        random_gradient = grads[chosen]
+
+        self.indices = np.append(self.indices, random_index)
         self.coefficients.append(0)
         self.gradients = np.append(self.gradients, random_gradient)
 
-        print(f"Random operator injected: index={random_index}, gradient={random_gradient:.6e}")
-        return random_index, random_gradient
+        print(f"Random operator injected: index={random_index}, "
+            f"gradient={random_gradient:.6e}, "
+            f"selection prob={probabilities[chosen]:.4f}")
+        return True, random_index, random_gradient
 
     def initialize(self):
         """
